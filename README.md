@@ -61,10 +61,15 @@ If you set the port inline instead of using `.env`, include the same `PAINEL_POR
 
 ## Features
 
-- National presidential results and regional results for all 26 states and the Federal District.
+- National presidential results alongside presidential vote counts in the selected state and municipality.
+- Counting progress for the selected state and city, using official totalized-section percentages.
+- Regional results for all 26 states and the Federal District.
 - Municipality filtering using TSE municipality codes, rather than IBGE codes.
 - Candidate vote counts, official percentages, and election status as published by TSE.
-- Automatic refresh every 30 seconds.
+- Presidential candidate colors: blue for Flávio Bolsonaro, red for Lula, yellow for Renan, and distinct colors for other candidates received from TSE.
+- State map colored by the presidential candidate with the most counted votes; ties and missing or zero votes remain gray.
+- Searchable city cards for the selected state, colored by presidential leader, with votes and counting progress. Click a city to view its complete results.
+- Automatic refresh every 30 seconds. City results load separately with at most four concurrent source requests; initial loading in larger states may take longer.
 - Shared in-memory caching and conditional requests using ETag and Last-Modified headers.
 - Previously fetched data remains visible with a warning when updates fail.
 
