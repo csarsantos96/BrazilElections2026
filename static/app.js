@@ -112,7 +112,7 @@ async function initMap(){
  const title=document.createElementNS(ns,'title');title.textContent=states[uf]+' ('+uf.toUpperCase()+')';path.append(title);
  const choose=()=>{showMapLevel(true);if($('state').value!==uf){$('state').value=uf;changeState();}else{syncMap();} $('map-back').focus();};path.addEventListener('click',choose);path.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose();}});svg.append(path);
  }
- $('state-map').replaceChildren(svg);syncMap();
+ $('state-map').replaceChildren(svg);syncMap();renderLegislatureMaps();
  }catch(e){$('map-status').textContent='Não foi possível carregar o mapa. Selecione o estado no campo acima.';}
 }
 
@@ -141,6 +141,7 @@ function renderLegend(){
  const neutral=node('span','Sem votos, sem dados ou empate','legend-item');neutral.style.setProperty('--candidate-color','#cbd2d8');root.append(neutral);
 }
 async function refreshColors(){
+ refreshLegislature();
  if(!mapPending){mapPending=true;$('map-update').textContent='Atualizando cores dos estados…';
  try{mapResults=await json('/api/president-map');syncMap();renderLegend();$('map-update').textContent=Object.values(mapResults).some(r=>r.warning)?'Alguns estados têm dados indisponíveis ou anteriores. Consulte os detalhes no mapa.':'Cores atualizadas com os últimos resultados recebidos.';}
  catch(e){$('map-update').textContent='Falha ao atualizar cores. As últimas cores recebidas foram mantidas.';}
@@ -252,3 +253,101 @@ $('load-seats').addEventListener('click',async()=>{
  button.textContent='Atualizar quantidades';
  }catch(e){$('seats-status').textContent=e.message;}finally{button.disabled=false;}
 });
+
+let legislatureResults={}, legislaturePending=false;
+const legislatureSelection={senate:'ac',federal:'ac',ideology:'ac'};
+const ideologyColors={'Direita':'#2563eb','Centro':'#e6a11a','Esquerda':'#dc3545','Não classificado':'#737d89'};
+function politicalBloc(party){const value=orientation(party);return value.includes('direita')||value==='Direita'?'Direita':value.includes('esquerda')||value==='Esquerda'?'Esquerda':value;}
+function partyColor(party){let hash=0;for(const char of party)hash=(hash*31+char.charCodeAt(0))>>>0;return `hsl(${hash%360} 65% 40%)`;}
+function legislatureCounts(result,ideology){
+ if(!ideology)return result?.parties||{};
+ const counts={};for(const [party,seats] of Object.entries(result?.parties||{})){const bloc=politicalBloc(party);counts[bloc]=(counts[bloc]||0)+seats;}return counts;
+}
+function largestGroup(counts){const entries=Object.entries(counts).sort((a,b)=>b[1]-a[1]);return entries.length&&(!entries[1]||entries[0][1]>entries[1][1])?entries[0][0]:null;}
+function legislatureData(kind,uf){return legislatureResults[uf]?.[kind==='ideology'?$('ideology-role').value:kind];}
+function legislatureDescription(kind,uf){
+ const result=legislatureData(kind,uf), counts=legislatureCounts(result,kind==='ideology');
+ return states[uf]+': '+(!result?.available?'Aguardando dados oficiais':result.mode+' · '+(Object.entries(counts).map(([name,seats])=>name+': '+seats+' vaga(s)').join(' · ')||'Sem vagas classificadas'));
+}
+function showLegislatureDetail(kind,uf){
+ legislatureSelection[kind]=uf;const root=$(kind+'-detail'),result=legislatureData(kind,uf);root.replaceChildren(node('strong',states[uf]+' ('+uf.toUpperCase()+')'));
+ if(!result?.available){root.append(node('p','Aguardando dados oficiais.'));if(result?.warning)root.append(node('p',result.warning,'warning'));return;}
+ root.append(node('p',result.mode+' · Urnas apuradas: '+pct(result.progress)));
+ const counts=legislatureCounts(result,kind==='ideology');
+ for(const [label,seats] of Object.entries(counts).sort((a,b)=>b[1]-a[1]))root.append(node('p',label+': '+fmt.format(seats)+' vaga(s)'));
+ if(!Object.keys(counts).length)root.append(node('p','Ainda não há vagas classificadas. Empates no corte do Senado aguardam definição.'));
+ for(const c of result.selected||[])root.append(node('p',c.name+' · '+c.party+' · '+politicalBloc(c.party)+' · '+fmt.format(c.votes)+' votos','legislature-candidate'));
+ if(result.warning)root.append(node('p',result.warning+' Exibindo os últimos dados recebidos.','warning'));
+ if(result.updated)root.append(node('p','Atualização: '+result.updated,'timestamp'));
+ if(result.source){const link=node('a','Consultar dados do TSE ↗');link.href=result.source;link.target='_blank';link.rel='noopener';root.append(link);}
+}
+function renderLegislatureMaps(){
+ renderNationalChambers();
+ const template=$('state-map').querySelector('svg');if(!template)return;
+ for(const kind of ['senate','federal','ideology']){
+ const svg=template.cloneNode(true),ideology=kind==='ideology',labels=new Set();svg.setAttribute('aria-label',kind==='senate'?'Partidos nas vagas do Senado':kind==='federal'?'Partidos nas vagas da Câmara':'Orientação política por estado');
+ for(const path of svg.querySelectorAll('[data-uf]')){
+ const uf=path.dataset.uf,result=legislatureData(kind,uf),counts=legislatureCounts(result,ideology),winner=largestGroup(counts);
+ Object.keys(counts).forEach(label=>labels.add(label));path.style.fill=winner?(ideology?ideologyColors[winner]:partyColor(winner)):'#d8d8df';path.classList.toggle('selected',legislatureSelection[kind]===uf);path.setAttribute('aria-pressed',String(legislatureSelection[kind]===uf));
+ const description=legislatureDescription(kind,uf);path.setAttribute('aria-label',description);path.querySelector('title').textContent=description;
+ const select=()=>{showLegislatureDetail(kind,uf);svg.querySelectorAll('[data-uf]').forEach(p=>{p.classList.toggle('selected',p===path);p.setAttribute('aria-pressed',String(p===path));});};
+ path.addEventListener('click',select);path.addEventListener('focus',()=>showLegislatureDetail(kind,uf));path.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}});
+ }
+ $(kind+'-map').replaceChildren(svg);const legend=$(kind+'-legend');legend.replaceChildren();
+ for(const label of (ideology?Object.keys(ideologyColors):[...labels].sort())){const item=node('span',label,'legend-item');item.style.setProperty('--candidate-color',ideology?ideologyColors[label]:partyColor(label));legend.append(item);}
+ const neutral=node('span','Empate ou sem vagas classificadas','legend-item');neutral.style.setProperty('--candidate-color','#d8d8df');legend.append(neutral);showLegislatureDetail(kind,legislatureSelection[kind]);
+ }
+}
+async function refreshLegislature(){
+ if(legislaturePending)return;legislaturePending=true;$('legislature-status').textContent='Atualizando Senado e Câmara nos 26 estados e no Distrito Federal…';
+ try{legislatureResults=await json('/api/legislature-map');renderLegislatureMaps();$('legislature-status').textContent=Object.values(legislatureResults).some(r=>r.senate.warning||r.federal.warning)?'Há estados com dados indisponíveis ou anteriores. Selecione o estado para ver os detalhes.':'Mapas atualizados. Consulte em cada estado se as vagas são confirmadas ou provisórias.';}
+ catch(e){$('legislature-status').textContent='Não foi possível atualizar os mapas. Os últimos dados recebidos foram mantidos.';}
+ finally{legislaturePending=false;}
+}
+$('ideology-role').addEventListener('change',renderLegislatureMaps);
+
+function chamberPositions(total){
+ const rows=total>100?9:4, positions=[];
+ const weights=Array.from({length:rows},(_,i)=>150+i*27);
+ const counts=weights.map(r=>Math.floor(total*r/weights.reduce((a,b)=>a+b,0)));
+ for(let i=0;counts.reduce((a,b)=>a+b,0)<total;i++)counts[rows-1-i%rows]++;
+ counts.forEach((count,row)=>{for(let i=0;i<count;i++){
+ const angle=Math.PI-i*Math.PI/(count-1),radius=weights[row];
+ positions.push({x:350+radius*Math.cos(angle),y:350-radius*Math.sin(angle),angle,row});
+ }});
+ return positions.sort((a,b)=>b.angle-a.angle||a.row-b.row);
+}
+function renderNationalChambers(){
+ const root=$('national-chambers');root.replaceChildren();
+ const ns='http://www.w3.org/2000/svg';
+ for(const kind of ['federal','senate'])for(const ideology of [false,true]){
+ const total=kind==='federal'?513:54, counts={};let confirmed=0,classified=0,available=0;
+ for(const state of Object.values(legislatureResults)){
+ const result=state[kind];if(result?.available)available++;
+ for(const [label,n] of Object.entries(legislatureCounts(result,ideology)))counts[label]=(counts[label]||0)+n;
+ const n=Object.values(result?.parties||{}).reduce((a,b)=>a+b,0);classified+=n;
+ if(result?.mode==='Eleitos pelo TSE')confirmed+=n;
+ }
+ const card=node('section',undefined,'chamber-card');
+ card.append(node('h3',kind==='federal'?'CÂMARA DOS DEPUTADOS':'SENADO'),node('p','Todos os estados · '+(ideology?'orientação política':'por partido'),'chamber-subtitle'));
+ const entries=Object.entries(counts).sort((a,b)=>ideology?Object.keys(ideologyColors).indexOf(a[0])-Object.keys(ideologyColors).indexOf(b[0]):b[1]-a[1]||a[0].localeCompare(b[0]));
+ const seats=entries.flatMap(([label,n])=>Array(n).fill(label));
+ const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 700 390');svg.setAttribute('role','img');svg.setAttribute('aria-label',`${kind==='federal'?'Câmara':'Senado'}: ${classified} de ${total} vagas classificadas. ${entries.map(([label,n])=>label+': '+n).join(', ')}`);
+ chamberPositions(total).forEach((position,i)=>{
+ const label=seats[i],circle=document.createElementNS(ns,'circle');circle.setAttribute('cx',position.x);circle.setAttribute('cy',position.y);circle.setAttribute('r',total>100?8:18);
+ circle.setAttribute('fill',label?(ideology?ideologyColors[label]:partyColor(label)):'#fff');circle.setAttribute('stroke',label?'#fff':'#cdd2d0');circle.setAttribute('stroke-width','1.5');
+ const title=document.createElementNS(ns,'title');title.textContent=label?label+' · '+counts[label]+' vaga(s)':'Vaga ainda sem classificação';circle.append(title);svg.append(circle);
+ });
+ for(const [y,text,size,weight] of [[300,String(classified),54,750],[328,'VAGAS CLASSIFICADAS',16,500],[352,'DE '+total+' EM DISPUTA',16,700]]){
+ const t=document.createElementNS(ns,'text');t.setAttribute('x','350');t.setAttribute('y',String(y));t.setAttribute('text-anchor','middle');t.setAttribute('font-size',size);t.setAttribute('font-weight',weight);t.textContent=text;svg.append(t);
+ }
+ card.append(svg);const legend=node('div',undefined,'chamber-legend');
+ for(const [label,n] of [...entries,...(classified<total?[['Aguardando classificação',total-classified]]:[])]){
+ const item=node('span',undefined,'legend-item');item.style.setProperty('--candidate-color',label==='Aguardando classificação'?'#e8ecea':ideology?ideologyColors[label]:partyColor(label));item.append(node('span',label),node('strong',fmt.format(n)));legend.append(item);
+ }
+ card.append(legend,node('p',`${confirmed} eleitos confirmados pelo TSE · ${classified-confirmed} vagas provisórias · dados disponíveis em ${available}/27 UFs.`,'chamber-note'));
+ if(ideology)card.append(node('p','Classificação editorial por partido: centro-direita em Direita e centro-esquerda em Esquerda. Não classificado aparece separado.','chamber-note'));
+ root.append(card);
+ }
+}
+renderNationalChambers();

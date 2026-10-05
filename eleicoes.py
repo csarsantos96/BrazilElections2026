@@ -234,6 +234,44 @@ def presidential_summary(result):
                 warning=result.get("warning"))
 
 
+def legislature_summary(result, role):
+    candidates = result.get("candidates", [])
+    official = [c for c in candidates if c.get("elected") or str(c.get("status", "")).lower().startswith("eleito")]
+    selected = official
+    mode = "Eleitos pelo TSE" if official else "Aguardando classificação"
+    if result.get("available") and not official:
+        if role == 6:
+            projection = result.get("proportional") or {}
+            if projection.get("available"):
+                selected = [c for c in candidates if projection.get("candidates", {}).get(str(c["number"]), {}).get("inside")]
+                mode = "Eleitos pelo TSE" if projection.get("official") else "Projeção provisória de vagas"
+        elif result.get("status") == "Resultado parcial":
+            ranked = sorted([c for c in candidates if c.get("destination") == "Válido" and c.get("votes", 0) > 0], key=lambda c: -c["votes"])
+            selected = [c for c in ranked[:2] if len(ranked) <= 2 or c["votes"] > ranked[2]["votes"]]
+            mode = "Liderança parcial nas duas vagas"
+    if not result.get("available"):
+        selected = []
+    counts = {}
+    for c in selected:
+        party = c.get("party") or "Não classificado"
+        counts[party] = counts.get(party, 0) + 1
+    return dict(available=result.get("available", False), mode=mode, parties=counts,
+                selected=selected, progress=result.get("progress"), updated=result.get("updated"),
+                warning=result.get("warning"), source=result.get("source"))
+
+
+@app.get("/api/legislature-map")
+async def legislature_map():
+    limit = asyncio.Semaphore(4)
+
+    async def fetch(uf):
+        async with limit:
+            senate, federal = await asyncio.gather(app.state.tse.result(uf, 5), app.state.tse.result(uf, 6))
+        return uf, dict(senate=legislature_summary(senate, 5), federal=legislature_summary(federal, 6))
+
+    return dict(await asyncio.gather(*(fetch(uf) for uf in STATES)))
+
+
 async def area_summaries(areas):
     limit = asyncio.Semaphore(4)
     async def fetch(code, uf, municipality):
