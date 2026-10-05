@@ -308,7 +308,7 @@ $('ideology-role').addEventListener('change',renderLegislatureMaps);
 
 function chamberPositions(total){
  const rows=total>100?9:4, positions=[];
- const weights=Array.from({length:rows},(_,i)=>150+i*27);
+ const weights=Array.from({length:rows},(_,i)=>150+i*(total>100?22.5:38));
  const counts=weights.map(r=>Math.floor(total*r/weights.reduce((a,b)=>a+b,0)));
  for(let i=0;counts.reduce((a,b)=>a+b,0)<total;i++)counts[rows-1-i%rows]++;
  counts.forEach((count,row)=>{for(let i=0;i<count;i++){
@@ -330,6 +330,7 @@ function renderNationalChambers(){
  }
  const card=node('section',undefined,'chamber-card');
  card.append(node('h3',kind==='federal'?'CÂMARA DOS DEPUTADOS':'SENADO'),node('p','Todos os estados · '+(ideology?'orientação política':'por partido'),'chamber-subtitle'));
+ if(ideology)for(const label of ['Direita','Centro','Esquerda'])counts[label]??=0;
  const entries=Object.entries(counts).sort((a,b)=>ideology?Object.keys(ideologyColors).indexOf(a[0])-Object.keys(ideologyColors).indexOf(b[0]):b[1]-a[1]||a[0].localeCompare(b[0]));
  const seats=entries.flatMap(([label,n])=>Array(n).fill(label));
  const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 700 390');svg.setAttribute('role','img');svg.setAttribute('aria-label',`${kind==='federal'?'Câmara':'Senado'}: ${classified} de ${total} vagas classificadas. ${entries.map(([label,n])=>label+': '+n).join(', ')}`);
