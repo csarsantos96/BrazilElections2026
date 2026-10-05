@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+from proporcional import project
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -113,10 +114,10 @@ def normalize(data, role, election, uf="br", cycle="ele2026"):
     for group in cargo.get("agr", []):
         for party in group.get("par", []):
             for c in party.get("cand", []):
-                candidates.append(dict(name=c.get("nmu") or c.get("nm"), number=c["n"], party=party["sg"], votes=int(c.get("vap") or 0), percent=number(c.get("pvapn", c.get("pvap"))), status=c.get("st", ""), destination=c.get("dvt", ""), photo=f"{BASE}/oficial/{cycle}/{election}/fotos/{'br' if role == 1 else uf}/{c.get('sqcand')}.jpeg"))
+                candidates.append(dict(name=c.get("nmu") or c.get("nm"), number=c["n"], party=party["sg"], votes=int(c.get("vap") or 0), percent=number(c.get("pvapn", c.get("pvap"))), status=c.get("st", ""), elected=c.get("e") == "s", destination=c.get("dvt", ""), photo=f"{BASE}/oficial/{cycle}/{election}/fotos/{'br' if role == 1 else uf}/{c.get('sqcand')}.jpeg"))
     candidates.sort(key=lambda c: (-c["votes"], c["name"]))
     s, v = data.get("s", {}), data.get("v", {})
-    return dict(available=True, candidates=candidates, progress=number(s.get("pstn", s.get("pst"))), sections=int(s.get("st") or 0), total_sections=int(s.get("ts") or 0), status={"n": "Aguardando apuracao", "p": "Resultado parcial", "f": "Totalizacao finalizada"}.get(data.get("and"), "Resultado parcial"), updated=f"{data.get('dg', '')} {data.get('hg', '')}".strip(), totalized=f"{data.get('dt', '')} {data.get('ht', '')}".strip(), valid=int(v.get("vv") or 0), blank=int(v.get("vb") or 0), null=int(v.get("tvn") or 0))
+    return dict(proportional=project(data, cargo) if role in (6, 7, 8) else None, available=True, candidates=candidates, progress=number(s.get("pstn", s.get("pst"))), sections=int(s.get("st") or 0), total_sections=int(s.get("ts") or 0), status={"n": "Aguardando apuracao", "p": "Resultado parcial", "f": "Totalizacao finalizada"}.get(data.get("and"), "Resultado parcial"), updated=f"{data.get('dg', '')} {data.get('hg', '')}".strip(), totalized=f"{data.get('dt', '')} {data.get('ht', '')}".strip(), valid=int(v.get("vv") or 0), blank=int(v.get("vb") or 0), null=int(v.get("tvn") or 0))
 
 
 @asynccontextmanager
@@ -140,6 +141,28 @@ async def home():
 @app.get("/api/states")
 async def states():
     return STATES
+
+
+@app.get("/api/seats")
+async def deputy_seats():
+    limit = asyncio.Semaphore(4)
+
+    async def state_seats(uf):
+        async with limit:
+            federal, regional = await asyncio.gather(
+                app.state.tse.result(uf, 6),
+                app.state.tse.result(uf, 8 if uf == "df" else 7))
+
+        def summary(result):
+            seats = (result.get("proportional") or {}).get("seats")
+            return dict(seats=seats or None,
+                        elected=sum(c.get("elected", False) or str(c.get("status", "")).lower().startswith("eleito")
+                                    for c in result.get("candidates", [])) if result.get("available") else None,
+                        updated=result.get("updated"), warning=result.get("warning"), source=result.get("source"))
+
+        return dict(uf=uf, name=STATES[uf], federal=summary(federal), regional=summary(regional))
+
+    return dict(items=await asyncio.gather(*(state_seats(uf) for uf in STATES)))
 
 
 def validate_uf(uf):
@@ -188,8 +211,17 @@ async def results(uf: str = "ac", municipality: str = ""):
     queries.append(app.state.tse.result(uf, 1))
     if municipality:
         queries.append(app.state.tse.result(uf, 1, municipality))
+    if municipality:
+        queries.append(app.state.tse.result(uf, 5))
     values = await asyncio.gather(*queries)
-    return dict(president=values[0], regional=dict(zip(map(str, roles), values[1:5])), state_president=values[5], local_president=values[6] if municipality else None, interval=30)
+    if municipality:
+        statewide = await asyncio.gather(*(app.state.tse.result(uf, r) for r in roles if r in (6, 7, 8)))
+        for r, state_result in zip((r for r in roles if r in (6, 7, 8)), statewide):
+            local_result = values[1 + roles.index(r)]
+            local_result["proportional"] = dict(state_result.get("proportional") or dict(available=False, message="Classificação estadual indisponível.", candidates={}))
+            local_result["proportional"]["warning"] = state_result.get("warning")
+            local_result["proportional"]["updated"] = state_result.get("updated")
+    return dict(state_senate=values[7] if municipality else values[2], president=values[0], regional=dict(zip(map(str, roles), values[1:5])), state_president=values[5], local_president=values[6] if municipality else None, interval=30)
 
 
 def presidential_summary(result):
@@ -198,7 +230,7 @@ def presidential_summary(result):
     leader = ranked[0] if result.get("available") and ranked and ranked[0]["votes"] > 0 else None
     tied = bool(leader and len(ranked) > 1 and ranked[1]["votes"] == leader["votes"])
     return dict(available=result.get("available", False), leader=None if tied else leader,
-                tied=tied, progress=result.get("progress"), updated=result.get("updated"),
+                tied=tied, candidates=ranked, progress=result.get("progress"), updated=result.get("updated"),
                 warning=result.get("warning"))
 
 

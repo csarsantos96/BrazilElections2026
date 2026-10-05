@@ -79,7 +79,9 @@ The application consumes official TSE JSON files using the EA11, EA12, and EA20 
 
 See the [TSE technical documentation for election results](https://www.tse.jus.br/eleicoes/informacoes-tecnicas-sobre-a-divulgacao-de-resultados) for details about the source formats.
 
-The dashboard displays official results and candidate status without generating simulated data or independently determining winners. Candidate percentages come from the official counted-vote fields, and vote classification is included when available.
+The dashboard displays official results and candidate status. For federal, state and district deputies, it also estimates who currently occupies the seats using statewide valid votes, including party-list votes and federation totals. It applies electoral quotient rounding, party quotients, the 10% individual minimum, the 80%/20% requirements for remainder seats, and unrestricted remaining seats using highest averages, under [TSE Resolution 23.677, articles 7–12-A](https://www.tse.jus.br/legislacao/compilada/res/2021/resolucao-no-23-677-de-16-de-dezembro-de-2021). Candidate ties use birth dates; unresolved ties or incomplete data suppress the projection.
+
+Projections are explicitly provisional and may change. Once the TSE reports final totalization (`tf=s`), its candidate classification overrides the estimate. Judicially blocked results (`esae=s`) do not generate a projection. Candidates with votes destined to party lists or annulled votes are excluded from seat allocation; candidates under judicial review are marked pending. Municipality filters display local votes alongside statewide seat classification, with its own update timestamp and source warning. Candidate percentages come from the official counted-vote fields.
 
 Results depend on source availability and the TSE publication flag (`dv=s`). Files from a different election or a simulated environment are rejected. Generation and tally timestamps are displayed as published, without timezone conversion.
 

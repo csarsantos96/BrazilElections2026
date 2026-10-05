@@ -1,5 +1,8 @@
 const $=id=>document.getElementById(id);
 const fmt=new Intl.NumberFormat('pt-BR');
+const partyOrientation={PT:'Esquerda',PCDOB:'Esquerda',PSOL:'Esquerda',PCB:'Esquerda',PCO:'Esquerda',PSTU:'Esquerda',UP:'Esquerda',PSB:'Centro-esquerda',PDT:'Centro-esquerda',REDE:'Centro-esquerda',PV:'Centro-esquerda',CIDADANIA:'Centro',MDB:'Centro',PSD:'Centro',PSDB:'Centro-direita',PODE:'Centro-direita',PODEMOS:'Centro-direita',SOLIDARIEDADE:'Centro',AVANTE:'Centro',PRD:'Direita',PP:'Direita',PL:'Direita',REPUBLICANOS:'Direita',NOVO:'Direita',UNIAO:'Direita',DC:'Direita',AGIR:'Centro-direita',MOBILIZA:'Direita',PRTB:'Direita'};
+function orientation(party){return partyOrientation[String(party||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/gi,'').toUpperCase()]||'Não classificado';}
+
 const pct=n=>Number(n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
 let mapResults={}, cityResults=[], mapPending=false, cityPending=null;
 let states={}, data=null, role='3', pending=false, version=0, seconds=30;
@@ -13,10 +16,30 @@ function render(target,result,query=''){
  const line=node('div',undefined,'statusline');line.append(node('span',result.status,'badge'));
  if(result.source){const a=node('a','JSON do TSE ↗');a.href=result.source;a.target='_blank';a.rel='noopener';line.append(a);}root.append(line);
  const head=node('div',undefined,'progresshead');head.append(node('span','Urnas apuradas (seções totalizadas)'),node('strong',pct(result.progress)));root.append(head,track(result.progress),node('p',fmt.format(result.sections)+' de '+fmt.format(result.total_sections)+' seções','sectioncount'));
- const list=node('div',undefined,'candidate-list');const q=query.toLocaleLowerCase('pt-BR');const candidates=result.candidates.filter(c=>(c.name+' '+c.party+' '+c.number).toLocaleLowerCase('pt-BR').includes(q));
+ const proportional=result.proportional;
+ if(proportional){
+ const box=node('div',undefined,'proportional');box.append(node('strong',proportional.official?'Quem foi eleito · estado inteiro':'Quem passa agora · estado inteiro'),node('p',proportional.message));
+ if(proportional.warning)box.append(node('p',proportional.warning+' Classificação com os últimos dados estaduais recebidos.','warning'));
+ if(proportional.available){box.append(node('p',fmt.format(proportional.seats)+' vagas'+(proportional.qe?' · Quociente eleitoral: '+fmt.format(proportional.qe):'')));
+ for(const g of proportional.groups||[])box.append(node('p',g.name+': '+fmt.format(g.seats)+' vagas · '+fmt.format(g.votes)+' votos válidos'));
+ if(proportional.updated)box.append(node('p','Classificação estadual atualizada: '+proportional.updated,'timestamp'));
+ }
+ const a=node('a','Como as vagas são distribuídas ↗');a.href='https://www.tse.jus.br/legislacao/compilada/res/2021/resolucao-no-23-677-de-16-de-dezembro-de-2021';a.target='_blank';a.rel='noopener';box.append(a);root.append(box);
+ }
+ const seatView=target==='regional'&&['5','6','7','8'].includes(role);
+ const senate=seatView&&role==='5'?data?.state_senate:null;
+ const senatePartial=senate?.available&&senate.status==='Resultado parcial';
+ const senateRanked=senatePartial?[...senate.candidates].filter(c=>c.destination==='Válido'&&c.votes>0).sort((a,b)=>b.votes-a.votes):[];
+ const senateLeaders=new Set(senateRanked.filter((c,i)=>i<2&&(!senateRanked[2]||c.votes>senateRanked[2].votes)).map(c=>String(c.number)));
+
+ if(seatView){const legend=node('p',undefined,'seat-legend');legend.append(node('span',senatePartial?'Verde: liderança parcial nas duas vagas do Senado':proportional?.available&&!proportional.official?'Verde: dentro das vagas na projeção provisória':'Verde: eleito segundo o TSE','legend-inside'),node('span','Sem destaque: demais candidatos'));root.append(legend,node('p','Posição por votos apurados'+($('municipality').value?' no município selecionado':' no estado')+'. '+(proportional?'A classificação das vagas considera o estado inteiro.':'O destaque do Senado considera o estado inteiro; liderança parcial pode mudar. Empates no corte aguardam definição.'),'sectioncount'));}
+ const list=node('div',undefined,'candidate-list');const q=query.toLocaleLowerCase('pt-BR');const ranked=[...result.candidates].sort((a,b)=>b.votes-a.votes);const positions=new Map(ranked.map((c,i)=>[c,i+1]));const candidates=ranked.filter(c=>(c.name+' '+c.party+' '+c.number).toLocaleLowerCase('pt-BR').includes(q));
  for(const c of candidates){const row=node('div',undefined,'candidate'), main=node('div',undefined,'candidate-main'), info=node('div',undefined,'candidate-info'), votes=node('div',undefined,'votes');
+ if(seatView)main.append(node('span',positions.get(c)+'º','candidate-rank'));
  if(c.photo){const img=node('img',undefined,'avatar');img.src=c.photo;img.alt='';img.loading='lazy';img.addEventListener('error',()=>img.remove(),{once:true});main.append(img);}
- info.append(node('div',c.name,'candidate-name'),node('div',[c.party,c.number,c.status,c.destination].filter(Boolean).join(' · '),'candidate-meta'));
+ info.append(node('div',c.name,'candidate-name'),node('div',[c.party,c.number,c.status,c.destination].filter(Boolean).join(' · '),'candidate-meta'),node('span',orientation(c.party),'party-orientation'));
+ const classification=senateLeaders.has(String(c.number))?{label:'Nas duas primeiras posições · parcial no estado',inside:true}:proportional?.available?proportional.candidates?.[String(c.number)]:seatView&&role==='5'&&(c.elected||/^eleito(?:\s|$)/i.test(c.status||''))?{label:'Eleito segundo o TSE',inside:true}:null;
+ if(classification){info.append(node('div',classification.label,'seat-status '+(classification.inside?'inside':'outside')));row.classList.add(classification.inside?'seat-inside':'seat-outside');}
  votes.append(node('strong',pct(c.percent)),node('span',fmt.format(c.votes)+' votos'));main.append(info,votes);row.append(main,track(c.percent));if(['president','state-president','local-president'].includes(target)){row.style.setProperty('--candidate-color',candidateColor(c));row.classList.add('presidential-candidate');}list.append(row);}
  if(!candidates.length)list.append(node('p',q?'Nenhum candidato encontrado.':'Candidatos ainda não publicados.','empty'));root.append(list);
  const summary=node('div',undefined,'summary');for(const [label,key] of [['Válidos','valid'],['Brancos','blank'],['Nulos','null']]){const item=node('div');item.append(node('span',label),node('strong',fmt.format(result[key])));summary.append(item);}root.append(summary);
@@ -55,22 +78,24 @@ document.querySelectorAll('[role=tab]').forEach(b=>{b.addEventListener('click',(
 $('state').addEventListener('change',changeState);$('municipality').addEventListener('change',()=>{version++;data=null;$('notice').hidden=true;scope();render('state-president',null);renderScopeProgress();renderRegional();refreshColors();$('local').hidden=true;refresh();});$('search').addEventListener('input',renderRegional);$('refresh').addEventListener('click',refresh);
 setInterval(()=>{if(document.hidden||pending)return;seconds--;if(seconds<=0)refresh();$('countdown').textContent='Atualização automática · '+Math.max(0,seconds)+' s';},1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-(async()=>{try{states=await json('/api/states');$('state').replaceChildren(...Object.entries(states).map(([code,name])=>new Option(name,code)));$('state').value='ac';await changeState();initMap();}catch(e){$('notice').hidden=false;$('notice').textContent=e.message;}})();
+(async()=>{try{states=await json('/api/states');$('state').replaceChildren(...Object.entries(states).map(([code,name])=>new Option(name,code)));$('state').value='ac';$('map-location').replaceChildren(new Option('Brasil',''),...Object.entries(states).map(([code,name])=>new Option(name,code)));await changeState();initMap();}catch(e){$('notice').hidden=false;$('notice').textContent=e.message;}})();
 
 function showMapLevel(municipal){
  $('state-map').hidden=municipal;
  $('municipal-view').hidden=!municipal;
  $('map-back').hidden=!municipal;
+ $('map-location').value=municipal?$('state').value:'';
+ $('map-tooltip').hidden=true;
  $('map-title').textContent=municipal?'Mapa de '+(states[$('state').value]||$('state').value):'Mapa do Brasil';
  $('map-status').textContent=municipal?'Brasil › '+(states[$('state').value]||$('state').value)+' · Escolha um município para consultar sua apuração.':'Clique em um estado para abrir o mapa dos municípios.';
 }
 $('map-back').addEventListener('click',()=>{
  showMapLevel(false);
- document.querySelector('#state-map [data-uf="'+$('state').value+'"]')?.focus();
+ $('map-location').focus();
 });
 function syncMap(){
  syncMunicipalMap();
- document.querySelectorAll('#state-map [data-uf]').forEach(p=>{const selected=p.dataset.uf===$('state').value;p.classList.toggle('selected',selected);p.setAttribute('aria-pressed',String(selected));const r=mapResults[p.dataset.uf];p.style.fill=r?.leader?candidateColor(r.leader):'#cbd2d8';const label=states[p.dataset.uf]+': '+areaDescription(r);p.setAttribute('aria-label',label);p.querySelector('title').textContent=label;});
+ document.querySelectorAll('#state-map [data-uf]').forEach(p=>{const selected=p.dataset.uf===$('state').value;p.classList.toggle('selected',selected);p.setAttribute('aria-pressed',String(selected));const r=mapResults[p.dataset.uf];p.style.fill=mapColor(r,false);const label=states[p.dataset.uf]+': '+areaDescription(r);p.setAttribute('aria-label',label);p.querySelector('title').textContent=label;});
  showMapLevel(!$('municipal-view').hidden);
 }
 async function initMap(){
@@ -82,6 +107,7 @@ async function initMap(){
  const uf=f.properties.sigla.toLowerCase();if(!states[uf])continue;
  const polygons=f.geometry.type==='Polygon'?[f.geometry.coordinates]:f.geometry.coordinates;
  const path=document.createElementNS(ns,'path');path.setAttribute('d',polygons.map(poly=>poly.map(ring=>ring.map((p,i)=>(i?'L':'M')+project(p).map(n=>n.toFixed(2)).join(',')).join(' ')+' Z').join(' ')).join(' '));
+ bindMapTooltip(path,()=>states[uf],()=>mapResults[uf],false);
  path.dataset.uf=uf;path.setAttribute('tabindex','0');path.setAttribute('role','button');path.setAttribute('aria-label',states[uf]);
  const title=document.createElementNS(ns,'title');title.textContent=states[uf]+' ('+uf.toUpperCase()+')';path.append(title);
  const choose=()=>{showMapLevel(true);if($('state').value!==uf){$('state').value=uf;changeState();}else{syncMap();} $('map-back').focus();};path.addEventListener('click',choose);path.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose();}});svg.append(path);
@@ -93,8 +119,9 @@ async function initMap(){
 const colorRegistry=new Map();
 function candidateColor(c){
  const name=(c.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
- if(name.includes('flavio')&&name.includes('bolsonaro'))return '#2563eb';
- if(name.includes('lula')||name.includes('luiz inacio'))return '#dc2626';
+ if(name.includes('flavio')&&name.includes('bolsonaro'))return '#190577';
+ if(name.includes('lula')||name.includes('luiz inacio'))return '#d7192d';
+ if(name.includes('cury'))return '#fb7821';
  if(name.includes('renan'))return '#eab308';
  const key=String(c.number||name);
  if(!colorRegistry.has(key)){const i=colorRegistry.size;colorRegistry.set(key,`hsl(${(145+i*137.508)%360} 58% 40%)`);}
@@ -140,7 +167,7 @@ function municipalResult(name){return cityResults.find(c=>normalizedCity(c.name)
 function syncMunicipalMap(){
  document.querySelectorAll('#municipal-map path').forEach(path=>{
  const city=municipalResult(path.dataset.name), selected=Boolean(city&&city.code===$('municipality').value);
- path.style.fill=city?.leader?candidateColor(city.leader):'#cbd2d8';path.classList.toggle('selected',selected);path.setAttribute('aria-pressed',String(selected));
+ path.style.fill=mapColor(city);path.classList.toggle('selected',selected);path.setAttribute('aria-pressed',String(selected));
  const label=path.dataset.name+': '+areaDescription(city);path.setAttribute('aria-label',label);path.querySelector('title').textContent=label;
  });
 }
@@ -174,8 +201,54 @@ async function loadMunicipalMap(){
  for(const f of features){
  const code=String(f.properties.codarea||f.id), name=result.names[code]||f.properties.nome||code;
  const path=document.createElementNS(ns,'path');path.dataset.name=name;path.setAttribute('d',polygons(f).map(poly=>poly.map(ring=>ring.map((p,i)=>(i?'L':'M')+project(p).map(n=>n.toFixed(2)).join(',')).join(' ')+' Z').join(' ')).join(' '));path.setAttribute('fill-rule','evenodd');path.setAttribute('tabindex','0');path.setAttribute('role','button');
+ bindMapTooltip(path,()=>name,()=>municipalResult(name),true);
  const title=document.createElementNS(ns,'title');path.append(title);path.addEventListener('click',()=>chooseMunicipalArea(name));path.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseMunicipalArea(name);}});svg.append(path);
  }
  $('municipal-map').replaceChildren(svg);syncMunicipalMap();$('municipal-map-status').textContent='Clique em um município para ver sua apuração. Passe sobre as áreas para ver os nomes e a liderança parcial.';
  }catch(e){if(request===municipalMapRequest)$('municipal-map-status').textContent='Não foi possível carregar o mapa municipal. Use a lista de cidades ou o seletor de município.';}
 }
+
+function mapColor(result,municipal=true){
+ if(!result?.leader)return '#d8d8df';
+ const color=candidateColor(result.leader);
+ // Misture a cor do candidato com branco conforme a vantagem eleitoral.
+ const strength=municipal&&Number(result.leader.percent)>=60?1:.72;
+ return `color-mix(in srgb, ${color} ${strength*100}%, white)`;
+}
+$('map-location').addEventListener('change',()=>{
+ const uf=$('map-location').value;
+ if(!uf){showMapLevel(false);return;}
+ showMapLevel(true);
+ if($('state').value!==uf){$('state').value=uf;changeState();}
+});
+function bindMapTooltip(path,getName,getResult,municipal){
+ const show=()=>{
+ const root=$('map-tooltip'), result=getResult();root.replaceChildren(node('strong',getName().toLocaleUpperCase('pt-BR'),'map-tooltip-title'));
+ if(!result?.available){root.append(node('p','Aguardando dados oficiais.','tooltip-empty'));}
+ else{
+ const progress=node('div',undefined,'tooltip-progress');progress.append(node('span',municipal?'APURAÇÃO POR MUNICÍPIO':'APURAÇÃO POR ESTADO'),node('strong',pct(result.progress)));root.append(progress);
+ for(const c of (result.candidates||[result.leader].filter(Boolean)).slice(0,3)){
+ const row=node('div',undefined,'tooltip-candidate'),head=node('div',undefined,'tooltip-candidate-head'),name=node('span',c.name),dot=node('i');dot.style.background=candidateColor(c);name.prepend(dot);head.append(name,node('strong',pct(c.percent)));const bar=track(c.percent);bar.firstChild.style.background=candidateColor(c);row.append(head,bar,node('div',fmt.format(c.votes)+' votos','tooltip-votes'));root.append(row);
+ }
+ if(result.warning)root.append(node('p','Últimos dados recebidos · '+result.warning,'tooltip-empty'));
+ root.append(node('p','Atualizado às '+(result.updated?.split(' ').at(-1)||'—'),'tooltip-updated'));
+ }
+ root.hidden=false;
+ };
+ path.addEventListener('pointerenter',show);path.addEventListener('focus',show);
+ path.addEventListener('pointerleave',()=>{$('map-tooltip').hidden=true;});path.addEventListener('blur',()=>{$('map-tooltip').hidden=true;});
+ path.addEventListener('keydown',e=>{if(e.key==='Escape')$('map-tooltip').hidden=true;});
+ path.addEventListener('click',()=>{if(municipal)show();});
+}
+
+$('party-guide').textContent=Object.entries(partyOrientation).filter(([party])=>party!=='PODEMOS').map(([party,label])=>party+': '+label).join(' · ');
+$('load-seats').addEventListener('click',async()=>{
+ const button=$('load-seats');button.disabled=true;$('seats-status').textContent='Consultando vagas e eleitos nos 27 estados e no Distrito Federal…'.replace('27 estados','26 estados');
+ try{
+ const result=await json('/api/seats');const table=node('table'),caption=node('caption','Deputados federais e estaduais (distritais no DF)'),thead=node('thead'),header=node('tr');
+ for(const label of ['Estado','Vagas federais','Eleitos federais','Vagas estaduais / distritais','Eleitos estaduais / distritais']){const th=node('th',label);th.scope='col';header.append(th);}thead.append(header);table.append(caption,thead);const body=node('tbody');
+ for(const item of result.items){const row=node('tr'),name=node('th',item.name+' ('+item.uf.toUpperCase()+')');name.scope='row';row.append(name);for(const result of [item.federal,item.regional]){for(const key of ['seats','elected']){const cell=node('td',result[key]===null?'—':fmt.format(result[key]));if(result.warning){cell.title=result.warning;cell.append(node('span',' *'));}row.append(cell);}}body.append(row);}table.append(body);$('seats-table').replaceChildren(table);
+ $('seats-status').textContent='Eleitos: apenas os marcados como eleitos pelo TSE; zero pode indicar classificação ainda não publicada. — indica dados indisponíveis. * indica pendência na fonte; podem ser os últimos dados recebidos.';
+ button.textContent='Atualizar quantidades';
+ }catch(e){$('seats-status').textContent=e.message;}finally{button.disabled=false;}
+});
