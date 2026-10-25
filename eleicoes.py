@@ -20,7 +20,8 @@ class SourceError(Exception):
 
 
 class TSE:
-    def __init__(self, client):
+    def __init__(self, client, turn=1):
+        self.turn = turn
         self.client = client
         self.cache = {}
         self.locks = {}
@@ -68,15 +69,15 @@ class TSE:
         config, warning = await self.get(f"{BASE}/oficial/comum/config/ele-c.json", 3600)
         if config.get("f") != "o":
             raise SourceError("A configuracao recebida nao pertence ao ambiente oficial.")
-        code = "6257" if role == 1 else "6259"
+        code = str((6257 if role == 1 else 6259) + (self.turn - 1))
         for pleito in config.get("pl", []):
             for election in pleito.get("e", []):
-                if str(election.get("cd")) == code and str(election.get("t")) == "1":
+                if pleito.get("c") == "ele2026" and str(election.get("cd")) == code and str(election.get("t")) == str(self.turn):
                     return pleito["c"], code, warning
-        raise SourceError("Eleicao geral de 2026 ainda nao consta na configuracao oficial.")
+        raise SourceError("Eleicao do turno selecionado de 2026 ainda nao consta na configuracao oficial.")
 
     async def municipalities(self, uf):
-        cycle, election, warning = await self.election(3)
+        cycle, election, warning = await self.election(1 if self.turn == 2 else 3)
         url = f"{BASE}/oficial/{cycle}/{election}/config/mun-e{int(election):06d}-cm.json"
         data, error = await self.get(url, 3600)
         for area in data.get("abr", []):
@@ -88,6 +89,15 @@ class TSE:
         url = None
         try:
             cycle, election, warning = await self.election(role)
+            if self.turn == 2 and role == 3:
+                config, _ = await self.get(f"{BASE}/oficial/comum/config/ele-c.json", 3600)
+                record = next(e for p in config.get("pl", []) if p.get("c") == cycle
+                              for e in p.get("e", []) if str(e.get("cd")) == election)
+                eligible = {a.get("cd", "").lower() for a in record.get("abr", [])
+                            if any(str(c.get("cd")) == "3" for c in a.get("cp", []))}
+                if eligible and "br" not in eligible and uf not in eligible:
+                    return dict(available=False, candidates=[], not_contested=True,
+                                warning="Sem disputa de governador no 2º turno, conforme configuração do TSE.")
             area = uf + municipality
             url = f"{BASE}/oficial/{cycle}/{election}/dados/{uf}/{area}-c{role:04d}-e{int(election):06d}-u.json"
             data, error = await self.get(url)
@@ -117,13 +127,13 @@ def normalize(data, role, election, uf="br", cycle="ele2026"):
                 candidates.append(dict(name=c.get("nmu") or c.get("nm"), number=c["n"], party=party["sg"], votes=int(c.get("vap") or 0), percent=number(c.get("pvapn", c.get("pvap"))), status=c.get("st", ""), elected=c.get("e") == "s", destination=c.get("dvt", ""), photo=f"{BASE}/oficial/{cycle}/{election}/fotos/{'br' if role == 1 else uf}/{c.get('sqcand')}.jpeg"))
     candidates.sort(key=lambda c: (-c["votes"], c["name"]))
     s, v = data.get("s", {}), data.get("v", {})
-    return dict(proportional=project(data, cargo) if role in (6, 7, 8) else None, available=True, candidates=candidates, progress=number(s.get("pstn", s.get("pst"))), sections=int(s.get("st") or 0), total_sections=int(s.get("ts") or 0), status={"n": "Aguardando apuracao", "p": "Resultado parcial", "f": "Totalizacao finalizada"}.get(data.get("and"), "Resultado parcial"), updated=f"{data.get('dg', '')} {data.get('hg', '')}".strip(), totalized=f"{data.get('dt', '')} {data.get('ht', '')}".strip(), valid=int(v.get("vv") or 0), blank=int(v.get("vb") or 0), null=int(v.get("tvn") or 0))
+    return dict(finalized=data.get("tf") == "s" or data.get("and") == "f", proportional=project(data, cargo) if role in (6, 7, 8) else None, available=True, candidates=candidates, progress=number(s.get("pstn", s.get("pst"))), sections=int(s.get("st") or 0), total_sections=int(s.get("ts") or 0), status={"n": "Aguardando apuracao", "p": "Resultado parcial", "f": "Totalizacao finalizada"}.get(data.get("and"), "Resultado parcial"), updated=f"{data.get('dg', '')} {data.get('hg', '')}".strip(), totalized=f"{data.get('dt', '')} {data.get('ht', '')}".strip(), valid=int(v.get("vv") or 0), blank=int(v.get("vb") or 0), null=int(v.get("tvn") or 0))
 
 
 @asynccontextmanager
 async def lifespan(app):
     async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"User-Agent": "PainelEleicoes2026/1.0"}) as client:
-        app.state.tse = TSE(client)
+        app.state.tse = TSE(client, turn=2)
         app.state.geography = TSE(client)
         app.state.municipal_names = {}
         yield
@@ -294,6 +304,64 @@ async def president_cities(uf: str):
         return dict(items=[], warning=str(exc))
     summaries = await area_summaries([(m["code"], uf, m["code"]) for m in items])
     return dict(items=[dict(**m, **summaries[m["code"]]) for m in items], warning=warning)
+
+
+
+
+@app.get("/api/runoff")
+async def runoff():
+    source = app.state.tse
+    config, warning = await source.get(f"{BASE}/oficial/comum/config/ele-c.json", 3600)
+    if config.get("f") != "o":
+        raise HTTPException(503, "Configuração oficial indisponível")
+    election = next((e for p in config.get("pl", []) if p.get("c") == "ele2026"
+                     for e in p.get("e", []) if str(e.get("cd")) == "6260" and str(e.get("t")) == "2"), None)
+    areas = election.get("abr", []) if election else []
+    eligible = {a.get("cd", "").lower() for a in areas
+                if any(str(c.get("cd")) == "3" for c in a.get("cp", []))}
+    explicit = bool(eligible and "br" not in eligible)
+    limit = asyncio.Semaphore(4)
+    async def state(uf):
+        async with limit:
+            president = await source.result(uf, 1)
+            if explicit and uf not in eligible:
+                governor = dict(available=False, candidates=[], not_contested=True,
+                                warning="Sem disputa de governador no 2º turno, conforme configuração do TSE.")
+            elif election:
+                governor = await source.result(uf, 3)
+            else:
+                governor = dict(available=False, candidates=[], warning="Aguardando configuração oficial do 2º turno para governador.")
+        return dict(uf=uf, name=STATES[uf], president=president, governor=governor)
+    president, abroad, items = await asyncio.gather(source.result("br", 1), source.result("zz", 1),
+                                                   asyncio.gather(*(state(uf) for uf in STATES)))
+    return dict(president=president, abroad=abroad, items=items, warning=warning, interval=30)
+
+
+@app.get("/api/overseas")
+async def overseas():
+    try:
+        places, warning = await app.state.tse.municipalities("zz")
+    except SourceError as exc:
+        return dict(items=[], warning=str(exc))
+    limit = asyncio.Semaphore(4)
+    async def place(item):
+        async with limit:
+            result = await app.state.tse.result("zz", 1, item["code"])
+        return dict(**item, result=result)
+    return dict(items=await asyncio.gather(*(place(item) for item in places)), warning=warning)
+
+@app.get("/api/runoff-local")
+async def runoff_local(uf: str, municipality: str):
+    validate_uf(uf)
+    try:
+        places, _ = await app.state.tse.municipalities(uf)
+    except SourceError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if municipality not in {p["code"] for p in places}:
+        raise HTTPException(422, "Município inválido para o estado")
+    president, governor = await asyncio.gather(app.state.tse.result(uf, 1, municipality),
+                                              app.state.tse.result(uf, 3, municipality))
+    return dict(president=president, governor=governor)
 
 
 if __name__ == "__main__":

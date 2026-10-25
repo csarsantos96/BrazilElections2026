@@ -119,7 +119,7 @@ async function initMap(){
 const colorRegistry=new Map();
 function candidateColor(c){
  const name=(c.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
- if(name.includes('flavio')&&name.includes('bolsonaro'))return '#190577';
+ if(name.includes('flavio')&&name.includes('bolsonaro'))return '#2563eb';
  if(name.includes('lula')||name.includes('luiz inacio'))return '#d7192d';
  if(name.includes('cury'))return '#fb7821';
  if(name.includes('renan'))return '#eab308';

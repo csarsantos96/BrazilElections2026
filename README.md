@@ -2,9 +2,11 @@
 
 A local dashboard for tracking Brazil's 2026 election results from the official Superior Electoral Court (TSE) data feed. Built with Python, FastAPI, and a vanilla JavaScript frontend, with Docker Compose for a reproducible setup.
 
-View nationwide presidential results alongside state and municipal results for governor, senator, federal deputy, and state deputy. The Federal District displays district deputies instead of state deputies.
+Painel do **2º turno de 25/10/2026** para presidente, governador e votos brasileiros no exterior.
 
-**Current scope: the first round of the 2026 elections only. Second-round support is not implemented.**
+A página inicial mostra o total presidencial nacional (incluindo exterior), o total do exterior e cartões para os 26 estados e o Distrito Federal. O mapa alterna entre presidente e governador; os filtros permitem buscar estado e ver apurações finalizadas. A consulta por município usa os códigos oficiais do TSE.
+
+A seção do exterior carrega sob demanda os locais de votação publicados no cadastro do TSE e permite buscar locais e filtrar resultados publicados ou apurações finalizadas. Depois de carregada, atualiza automaticamente. Votação encerrada não significa apuração publicada: o painel respeita a autorização de divulgação do TSE e não antecipa votos por fuso horário.
 
 ## Quick start with Docker
 
@@ -59,33 +61,17 @@ docker compose down
 
 If you set the port inline instead of using `.env`, include the same `PAINEL_PORT` value when starting or recreating the service.
 
-## Features
+## Fonte e comportamento
 
-- National presidential results alongside presidential vote counts in the selected state and municipality.
-- Counting progress for the selected state and city, using official totalized-section percentages.
-- Regional results for all 26 states and the Federal District.
-- Municipality filtering using TSE municipality codes, rather than IBGE codes.
-- Candidate vote counts, official percentages, and election status as published by TSE.
-- Presidential candidate colors: blue for Flávio Bolsonaro, red for Lula, yellow for Renan, and distinct colors for other candidates received from TSE.
-- State map colored by the presidential candidate with the most counted votes; ties and missing or zero votes remain gray.
-- Searchable city cards for the selected state, colored by presidential leader, with votes and counting progress. Click a city to view its complete results.
-- Automatic refresh every 30 seconds. City results load separately with at most four concurrent source requests; initial loading in larger states may take longer.
-- Shared in-memory caching and conditional requests using ETag and Last-Modified headers.
-- Previously fetched data remains visible with a warning when updates fail.
-
-## Data source and behavior
-
-The application consumes official TSE JSON files using the EA11, EA12, and EA20 layouts. For the 2026 first round, it selects election IDs `6257` (federal) and `6259` (state), validating them against the official EA11 configuration.
-
-See the [TSE technical documentation for election results](https://www.tse.jus.br/eleicoes/informacoes-tecnicas-sobre-a-divulgacao-de-resultados) for details about the source formats.
-
-The dashboard displays official results and candidate status. For federal, state and district deputies, it also estimates who currently occupies the seats using statewide valid votes, including party-list votes and federation totals. It applies electoral quotient rounding, party quotients, the 10% individual minimum, the 80%/20% requirements for remainder seats, and unrestricted remaining seats using highest averages, under [TSE Resolution 23.677, articles 7–12-A](https://www.tse.jus.br/legislacao/compilada/res/2021/resolucao-no-23-677-de-16-de-dezembro-de-2021). Candidate ties use birth dates; unresolved ties or incomplete data suppress the projection.
-
-Projections are explicitly provisional and may change. Once the TSE reports final totalization (`tf=s`), its candidate classification overrides the estimate. Judicially blocked results (`esae=s`) do not generate a projection. Candidates with votes destined to party lists or annulled votes are excluded from seat allocation; candidates under judicial review are marked pending. Municipality filters display local votes alongside statewide seat classification, with its own update timestamp and source warning. Candidate percentages come from the official counted-vote fields.
-
-Results depend on source availability and the TSE publication flag (`dv=s`). Files from a different election or a simulated environment are rejected. Generation and tally timestamps are displayed as published, without timezone conversion.
-
-Failed requests wait five minutes before retrying. HTTP 403 or 429 responses pause upstream requests for eleven minutes. The cache is held in memory and resets when the application restarts.
+- Fonte oficial: [documentação técnica do TSE](https://www.tse.jus.br/eleicoes/informacoes-tecnicas-sobre-a-divulgacao-de-resultados).
+- Códigos do segundo turno: `6258` (presidente) e `6260` (governador), validados na configuração oficial EA11 do ciclo `ele2026` e turno `2`. A ausência da configuração exibe pendência, sem usar votos do primeiro turno.
+- Estados sem disputa são identificados pela abrangência explícita de governador no EA11. Uma falha na fonte não prova ausência de disputa.
+- Exterior usa a abrangência `zz` e seus locais cadastrados pelo TSE; nomes e códigos são preservados.
+- Apuração finalizada usa `tf=s` ou andamento final `and=f`; seções totalizadas e situação dos candidatos vêm do TSE.
+- Atualização automática a cada 30 segundos, cache compartilhado, ETag e Last-Modified. Consultas por abrangência limitadas a quatro tarefas simultâneas.
+- Dados anteriores continuam visíveis com aviso quando a fonte falha. Falhas aguardam cinco minutos; HTTP 403/429 suspende consultas por onze minutos.
+- Horários aparecem como publicados pelo TSE. Empate, ausência de votos e resultados indisponíveis deixam o mapa cinza.
+- Os módulos e endpoints anteriores de primeiro turno e proporcionais foram preservados no código; a interface do segundo turno consulta apenas presidente e governador.
 
 ## Technology stack
 
